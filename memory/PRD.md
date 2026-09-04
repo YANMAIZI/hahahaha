@@ -51,3 +51,4 @@
 ## 2026-06 — Inventory value + item actions
 - Total inventory value shown in "Мои скины" panel header (main page, top-right of panel) and in profile (balance block + inventory tab bar).
 - Profile inventory: removed "Выбрать для продажи" switch; clicking an item reveals two solid-color buttons «Продать · price» (gold) and «Вывести» (light); "Продать всё · total" kept.
+- Full production reset performed (bank 0, all players/games/ledger wiped; shop_items kept). Reusable script: `python3 /app/backend/tests/reset_all.py`.
