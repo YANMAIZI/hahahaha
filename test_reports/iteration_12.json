@@ -1,0 +1,36 @@
+{
+  "summary": "Verified the new fair fixed-house-edge (RTP 0.90) upgrade model end-to-end on the live preview. Backend: 9/9 pytest checks pass (game-config values, server-side chance = bet/price*RTP, 83% bet cap, 1% min-chance, 600 real spins across 2 runs with win rate 0.433 and 0.427 vs expected 0.45 and ZERO forced_loss, protection doc = {rtp,bank,liabilities} with no 'player' key, pre-spin solvency refusal with no debit + cheap target still playable, admin settings only rtp_target, PUT rtp 0.85 reflected in /api/game-config then restored to 0.9, /api/admin/players rows have no 'cycle'/_id). Frontend: guest and logged-in chance gauge correct (x2 -> 45.00%, 75% -> 75.00% with bet 73.33 on Case #1 88), max slider does not trigger 'Ставка выше…', real spin completed (win, skin added to inventory, header balance 5000 -> 4926.67). Admin UI: bank banner shows 'Честная модель с фиксированной комиссией 10%', single RTP slider only, Players tab has no 'Судьба депозита' column. Full cleanup done: all qa_* docs deleted from users/upgrades/drops/presence/item_history/luck_cycles, bank untouched at 42000, rtp_target = 0.9.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/admin/bank", "issue": "settings object leaks the internal 'updated_at' metadata field alongside rtp_target (no legacy drain_chance/max_multiplier keys present, so cosmetic only)"}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "PlayersTab", "issue": "Stale hint banner still describes the REMOVED drain model: 'При каждом подтверждённом депозите игроку случайно выпадает «судьба»: слив … или множитель ×1.5..×10 … Сливы подряд снижают шанс следующего слива'. Contradicts the new fair model explained on the Bank tab.", "selector": "[data-testid=\"players-hint\"]", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Admin > Bank", "issues": ["'Принудительных сливов: 19' stat is legacy-only data; hint clarifies it, but consider hiding when the new model produces 0"]},
+      {"screen": "Header", "issues": ["Balance chip has no dedicated data-testid for its value (only data-testid=\"balance-button\"); harder to assert balance updates"]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iteration12.py", "/app/test_reports/pytest/iteration12.xml"],
+  "action_items": [
+    "Update PlayersTab hint text (data-testid=\"players-hint\") to describe the fair fixed-commission model instead of the removed 'судьба депозита'/drain/luck-cycle system",
+    "Optional: strip 'updated_at' from the settings payload returned by GET /api/admin/bank and PUT /api/admin/bank/settings"
+  ],
+  "critical_code_review_comments": [
+    "upgrade handler: solvency uses total liabilities including the acting player's own balance, so a single whale's balance can block cheap upgrades for everyone (observed: raising one test user's balance above headroom made even the 88-price target refused). Consider excluding the debited bet / using a liability model that nets out the current stake, or document this as intended conservatism.",
+    "forced_loss / forced_reason and the losing_roll() fallback remain in the code path only as a race guard; keep in mind admin 'Принудительных сливов' counter will still increment on lock-acquire failure (forced_reason='lock'), which is a payout denial that fails the 'no cancelled wins' promise if the Mongo lease ever times out — worth alerting/logging on it."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration12.py"],
+  "success_rate": {"backend": "100%", "frontend": "95%"},
+  "seed_data_creation": "Temporary Mongo users qa_fair_main, qa_solvency, qa_ui_user (all deleted, along with their upgrades/drops/presence/item_history). Bank balance never modified (42000), rtp_target restored to 0.9.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "Admin: 10 seed phrases from /app/memory/test_credentials.md; player JWT minted for session_id qa_ui_user (user deleted after test)",
+  "context_for_next_testing_agent": "Run tests/test_iteration12.py with -n 0 (xdist loadscope would run TestAdmin's RTP 0.85 change concurrently with the 300-spin fairness test and break it). Solvency test computes balance = headroom - 200 so that a 1580 prize is refused while an 88 prize is allowed; using headroom + 3000 (as originally suggested) makes headroom negative and refuses even the cheap target.",
+  "rca_of_the_issue": "No functional defects found. The only real finding is stale copy in the admin Players tab hint left over from the old drain model."
+}

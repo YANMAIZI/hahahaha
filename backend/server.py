@@ -135,8 +135,6 @@ class AdminConfirmIn(BaseModel):
 
 class BankSettingsIn(BaseModel):
     rtp_target: Optional[float] = Field(default=None, ge=0.5, le=1.0)
-    drain_chance: Optional[float] = Field(default=None, ge=0.1, le=0.9)
-    max_multiplier: Optional[float] = Field(default=None, ge=1.5, le=10.0)
 
 
 class BankAdjustIn(BaseModel):
@@ -331,76 +329,15 @@ async def take_skins(user: dict, uids: List[str], credit: bool = False) -> List[
 
 
 # ---------- Casino bank ----------
-BANK_DEFAULTS = {"rtp_target": 0.90, "drain_chance": 0.45, "max_multiplier": 6.0}
+# House edge model (like classic upgraders): shown chance = bet/price * RTP. The roll is honest, nothing is cancelled.
+# The only guard is solvency: a prize the bank cannot cover is refused BEFORE the spin (never a fake loss).
+BANK_DEFAULTS = {"rtp_target": 0.90}
 MAX_PROMO_BONUS = 0.5
 _upgrade_lock = asyncio.Lock()
-FATE_WEIGHTS = [(1.5, 30), (2.0, 25), (3.0, 20), (4.0, 12), (6.0, 8), (8.0, 3), (10.0, 2)]
 
 
-def draw_fate(prev_cycles: List[dict], settings: dict, bank_headroom: float, base: float) -> tuple:
-    """Random 'fate' for a deposit cycle: drain (ends near 0) or a win multiplier. Drawn once, before any bets."""
-    drain = float(settings["drain_chance"])
-    streak = 0
-    for c in prev_cycles:
-        if c.get("kind") == "drain":
-            streak += 1
-        else:
-            break
-    drain *= 0.7 ** streak
-    if prev_cycles and prev_cycles[0].get("kind") == "win" and prev_cycles[0].get("multiplier", 0) >= 3:
-        drain = min(0.9, drain * 1.5)
-    if bank_headroom < base * 2:
-        drain = max(drain, 0.8)
-    drain = max(0.05, min(0.95, drain))
-    if random.random() < drain:
-        return "drain", round(random.uniform(0.2, 0.6), 2), {"drain_chance": round(drain, 3), "streak": streak}
-    pool = [(m, w) for m, w in FATE_WEIGHTS if m <= float(settings["max_multiplier"])] or [FATE_WEIGHTS[0]]
-    m = random.choices([m for m, _ in pool], weights=[w for _, w in pool])[0]
-    return "win", m, {"drain_chance": round(drain, 3), "streak": streak}
-
-
-async def start_luck_cycle(session_id: str, base: float, deposit_id: Optional[str] = None) -> dict:
-    settings = await bank_settings()
-    bank = await bank_balance()
-    li = await liabilities()
-    prev = await db.luck_cycles.find({"session_id": session_id}, {"_id": 0}).sort("started_at", -1).to_list(10)
-    base = max(float(base), 20.0)
-    kind, mult, meta = draw_fate(prev, settings, bank - li["total"], base)
-    cycle = {
-        "id": str(uuid.uuid4()), "session_id": session_id, "deposit_id": deposit_id, "kind": kind,
-        "multiplier": mult, "base": base, "allowance": round(base * mult, 2), "meta": meta, "started_at": now_utc(),
-    }
-    await db.luck_cycles.update_many({"session_id": session_id, "active": True}, {"$set": {"active": False}})
-    await db.luck_cycles.insert_one({**cycle, "active": True})
-    return cycle
-
-
-async def player_stats(session_id: str) -> dict:
-    ups = await db.upgrades.find({"session_id": session_id}, {"_id": 0, "bet_amount": 1, "items_total": 1, "win": 1, "forced_loss": 1, "target_item.price": 1, "created_at": 1}).sort("created_at", -1).to_list(5000)
-    cycle = await db.luck_cycles.find_one({"session_id": session_id, "active": True}, {"_id": 0})
-    if not cycle:
-        u = await db.users.find_one({"session_id": session_id}, {"_id": 0, "balance": 1, "skins.price": 1}) or {}
-        holdings = float(u.get("balance") or 0) + sum(float(s.get("price") or 0) for s in u.get("skins", []))
-        cycle = await start_luck_cycle(session_id, holdings)
-    started = as_utc(cycle["started_at"])
-    paid_cycle = sum(float((u.get("target_item") or {}).get("price") or 0) for u in ups if u.get("win") and as_utc(u["created_at"]) >= started)
-    wagered = sum(float(u.get("bet_amount") or 0) + float(u.get("items_total") or 0) for u in ups)
-    paid = sum(float((u.get("target_item") or {}).get("price") or 0) for u in ups if u.get("win"))
-    return {"wagered": wagered, "paid": paid, "games": len(ups), "cycle": cycle, "paid_cycle": paid_cycle}
-
-
-def player_deny_probability(st: dict, price: float) -> tuple:
-    """Within the cycle allowance the roulette is honest; past it the player's luck runs out."""
-    c = st["cycle"]
-    remaining = float(c["allowance"]) - st["paid_cycle"]
-    f = {"kind": c["kind"], "multiplier": c["multiplier"], "allowance": c["allowance"], "paid_cycle": round(st["paid_cycle"], 2)}
-    if price <= remaining + 1e-6:
-        f["p"] = 0.0
-        return 0.0, f
-    tiny = price <= float(c["base"]) * 0.15 and st["paid_cycle"] <= float(c["allowance"]) * 1.3
-    p = 0.7 if tiny else 1.0
-    f["p"] = p
-    return p, f
+def win_chance(total_bet: float, target_price: float, rtp: float) -> float:
+    return min(MAX_CHANCE, total_bet / target_price * rtp)
 
 
 async def bank_settings() -> dict:
@@ -443,22 +380,11 @@ async def rtp_stats() -> dict:
     return {"wagered": wagered, "paid": paid, "rtp": (paid / wagered) if wagered > 0 else 0.0}
 
 
-async def payout_allowed(target_price: float, total_bet: float) -> tuple:
-    """Fail-safe: any error => payout denied. Casino must stay solvent and within RTP."""
-    try:
-        settings = await bank_settings()
-        bank = await bank_balance()
-        li = await liabilities()
-        if bank + 1e-9 < li["total"] + target_price:
-            return False, "bank", {"bank": bank, "liabilities": li["total"]}
-        st = await rtp_stats()
-        projected = (st["paid"] + target_price) / (st["wagered"] + total_bet)
-        if projected > float(settings["rtp_target"]) + 1e-9:
-            return False, "rtp", {"projected_rtp": projected, "rtp_target": settings["rtp_target"]}
-        return True, "ok", {"bank": bank, "liabilities": li["total"], "projected_rtp": projected}
-    except Exception:
-        logger.exception("payout check failed — denying payout")
-        return False, "error", {}
+async def solvency_headroom() -> tuple:
+    """How much prize value the bank can still cover on top of all player liabilities."""
+    bank = await bank_balance()
+    li = await liabilities()
+    return bank - li["total"], {"bank": bank, "liabilities": li["total"]}
 
 
 def losing_roll(chance: float) -> float:
@@ -508,6 +434,12 @@ async def root():
 @api_router.get("/rarities")
 async def rarities():
     return RARITIES
+
+
+@api_router.get("/game-config")
+async def game_config():
+    rtp = float((await bank_settings())["rtp_target"])
+    return {"rtp": rtp, "min_chance": MIN_CHANCE, "max_chance": MAX_CHANCE, "max_bet_ratio": MAX_CHANCE / rtp}
 
 
 @api_router.post("/presence", response_model=StatsOut)
@@ -832,7 +764,6 @@ async def admin_confirm_deposit(deposit_id: str, payload: AdminConfirmIn, reques
     await db.users.update_one({"session_id": dep["session_id"]}, {"$inc": {"balance": credited}})
     await db.deposits.update_one({"id": deposit_id}, {"$set": {"credited": credited, "amount": credited, "fee": DEPOSIT_FEE, "bonus_applied": bonus}})
     bank = await bank_add("deposit", rap, note=f"{dep.get('nickname')}: +{rap} RAP → {credited}", ref_id=deposit_id, session_id=dep["session_id"])
-    await start_luck_cycle(dep["session_id"], credited, deposit_id)
     return {"ok": True, "rap": rap, "credited": credited, "bank": bank}
 
 
@@ -905,8 +836,7 @@ async def admin_bank_settings(payload: BankSettingsIn, request: Request):
     if not changes:
         raise HTTPException(status_code=400, detail="Нет изменений")
     await db.bank_settings.update_one({"id": "main"}, {"$set": {**changes, "updated_at": now_utc()}}, upsert=True)
-    labels = {"rtp_target": "RTP", "drain_chance": "Шанс слива", "max_multiplier": "Макс. множитель"}
-    note = ", ".join(f"{labels[k]} → ×{v}" if k == "max_multiplier" else f"{labels[k]} → {round(v * 100)}%" for k, v in changes.items())
+    note = ", ".join(f"RTP → {round(v * 100)}% (комиссия {round((1 - v) * 100)}%)" for k, v in changes.items())
     await db.bank_ledger.insert_one({"id": str(uuid.uuid4()), "kind": "settings", "amount": 0.0, "bank_after": await bank_balance(), "note": note, "created_at": now_utc()})
     return await bank_settings()
 
@@ -932,18 +862,12 @@ async def admin_players(request: Request):
     users = {u["session_id"]: u for u in await db.users.find({"session_id": {"$in": sids}}, {"_id": 0, "session_id": 1, "nickname": 1, "balance": 1, "skins.price": 1, "roblox_nick": 1}).to_list(500)}
     deps = {d["_id"]: d for d in await db.deposits.aggregate([{"$match": {"session_id": {"$in": sids}, "status": "confirmed"}}, {"$group": {"_id": "$session_id", "credited": {"$sum": {"$ifNull": ["$credited", 0]}}, "rap": {"$sum": {"$ifNull": ["$rap", 0]}}}}]).to_list(500)}
     withdrawn = {w["_id"]: w["v"] for w in await db.withdrawals.aggregate([{"$match": {"session_id": {"$in": sids}, "status": "done"}}, {"$group": {"_id": "$session_id", "v": {"$sum": {"$ifNull": ["$item.price", 0]}}}}]).to_list(500)}
-    cycles = {c["session_id"]: c for c in await db.luck_cycles.find({"session_id": {"$in": sids}, "active": True}, {"_id": 0}).to_list(500)}
-    cycle_paid: dict = {}
-    for sid, c in cycles.items():
-        cycle_paid[sid] = await _sum(db.upgrades, {"session_id": sid, "win": True, "created_at": {"$gte": c["started_at"]}}, "$target_item.price")
     out = []
     for r in rows:
         u = users.get(r["_id"], {})
         inv = sum(float(s.get("price") or 0) for s in u.get("skins", []))
-        c = cycles.get(r["_id"])
         out.append({
             "session_id": r["_id"], "nickname": u.get("nickname", "?"), "roblox_nick": u.get("roblox_nick"),
-            "cycle": {"kind": c["kind"], "multiplier": c["multiplier"], "allowance": c["allowance"], "paid": cycle_paid.get(r["_id"], 0.0)} if c else None,
             "deposits": float(deps.get(r["_id"], {}).get("credited", 0)), "deposits_rap": float(deps.get(r["_id"], {}).get("rap", 0)),
             "games": r["games"], "wins": r["wins"], "forced": r["forced"], "wagered": float(r["wagered"]), "paid": float(r["paid"]),
             "rtp": (float(r["paid"]) / float(r["wagered"])) if r["wagered"] else 0.0,
@@ -1064,13 +988,19 @@ async def upgrade(payload: UpgradeIn, request: Request):
     target_price = float(shop_item.get("price") or 0)
     if target_price <= 0:
         raise HTTPException(status_code=400, detail="Скин для апгрейда недоступен")
-    if total_bet > target_price * MAX_CHANCE + 1e-6:
-        raise HTTPException(status_code=400, detail="Ставка не может превышать 75% стоимости скина")
-    # chance is always derived server-side from bet/price; the client value is ignored
-    chance = total_bet / target_price
+    rtp = float((await bank_settings())["rtp_target"])
+    max_ratio = MAX_CHANCE / rtp
+    if total_bet > target_price * max_ratio + 1e-6:
+        raise HTTPException(status_code=400, detail=f"Ставка не может превышать {round(max_ratio * 100)}% стоимости скина")
+    # chance is always derived server-side: bet/price minus the house edge; the client value is ignored
+    chance = win_chance(total_bet, target_price, rtp)
     if chance < MIN_CHANCE - 1e-9:
         raise HTTPException(status_code=400, detail="Минимальный шанс — 1%: увеличьте ставку")
-    chance = min(MAX_CHANCE, chance)
+
+    # solvency: refuse a prize the bank cannot cover instead of faking a loss later
+    headroom, solvency = await solvency_headroom()
+    if headroom + total_bet + 1e-9 < target_price:
+        raise HTTPException(status_code=400, detail="Этот скин сейчас недоступен для апгрейда — выберите скин дешевле")
 
     # atomic debit: balance and skins are checked and taken in one update (no double spend)
     debit_filter: dict = {"session_id": payload.session_id, "balance": {"$gte": payload.bet_amount - 1e-9}}
@@ -1091,24 +1021,13 @@ async def upgrade(payload: UpgradeIn, request: Request):
         win = abs(roll * 360 - 180) < chance * 180
         forced_loss = False
         forced_reason = None
-        protection: dict = {}
+        protection: dict = {"rtp": rtp, **solvency}
         if win:
-            allowed, forced_reason, protection = await payout_allowed(target_price, total_bet)
-            if not lock.leased:
-                allowed, forced_reason = False, "lock"
-            if allowed:
-                try:
-                    st = await player_stats(payload.session_id)
-                    p, factors = player_deny_probability(st, target_price)
-                    protection["player"] = factors
-                    if random.random() < p:
-                        allowed, forced_reason = False, "player"
-                except Exception:
-                    logger.exception("player check failed — denying payout")
-                    allowed, forced_reason = False, "error"
-            if not allowed:
-                win = False
-                forced_loss = True
+            # race guard only: another payout in the same instant could have used the headroom
+            headroom, solvency = await solvency_headroom()
+            if not lock.leased or headroom + 1e-9 < target_price:
+                win, forced_loss, forced_reason = False, True, ("lock" if not lock.leased else "bank")
+                protection.update(solvency)
                 roll = losing_roll(chance)
         angle = roll * 360 - 180
 
@@ -1191,7 +1110,6 @@ async def ensure_indexes():
     await db.withdrawals.create_index([("status", 1), ("created_at", 1)])
     await db.bank_ledger.create_index("created_at")
     await db.upgrades.create_index([("win", 1), ("forced_loss", 1)])
-    await db.luck_cycles.create_index([("session_id", 1), ("active", 1)])
     await db.oauth_states.create_index("created_at", expireAfterSeconds=600)
     await db.admin_sessions.create_index("jti", unique=True)
     await db.admin_sessions.create_index("expires_at", expireAfterSeconds=0)

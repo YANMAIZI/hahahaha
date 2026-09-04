@@ -53,7 +53,13 @@ export default function UpgradePanel({ sessionId, user, settings, onSettingsChan
   const { authUser, openAuth } = useAuth();
   const [bet, setBet] = useState(0);
   const [chance, setChance] = useState(0.5);
-  const MAX_CHANCE = 0.75;
+  const [cfg, setCfg] = useState({ rtp: 0.9, min_chance: 0.01, max_chance: 0.75, max_bet_ratio: 0.75 / 0.9 });
+  useEffect(() => {
+    api.gameConfig().then(setCfg).catch(() => {});
+  }, []);
+  const MAX_CHANCE = cfg.max_chance;
+  const RTP = cfg.rtp;
+  const MAX_RATIO = cfg.max_bet_ratio;
   const [activeQuick, setActiveQuick] = useState(null);
   const [rotation, setRotation] = useState(180);
   const [spinning, setSpinning] = useState(false);
@@ -64,10 +70,10 @@ export default function UpgradePanel({ sessionId, user, settings, onSettingsChan
   const balance = Number(user.balance) || 0;
   const targetPriceNum = Number(target?.price) || 0;
   const skinsTotal = betSkins.reduce((sum, sk) => sum + (Number(sk.price) || 0), 0);
-  const maxBet = target && targetPriceNum > 0 ? Math.max(0, Math.min(balance, Math.floor((targetPriceNum * MAX_CHANCE - skinsTotal) * 100) / 100)) : 0;
+  const maxBet = target && targetPriceNum > 0 ? Math.max(0, Math.min(balance, Math.floor((targetPriceNum * MAX_RATIO - skinsTotal) * 100) / 100)) : 0;
   const totalBet = bet + skinsTotal;
-  const overLimit = Boolean(target) && targetPriceNum > 0 && totalBet > targetPriceNum * MAX_CHANCE + 1e-6;
-  const underMin = Boolean(target) && targetPriceNum > 0 && totalBet > 0 && totalBet / targetPriceNum < 0.01 - 1e-9;
+  const overLimit = Boolean(target) && targetPriceNum > 0 && totalBet > targetPriceNum * MAX_RATIO + 1e-6;
+  const underMin = Boolean(target) && targetPriceNum > 0 && totalBet > 0 && (totalBet / targetPriceNum) * RTP < cfg.min_chance - 1e-9;
   const canUpgrade = !spinning && Boolean(target) && totalBet > 0 && bet <= maxBet && !overLimit && !underMin;
 
   useEffect(() => () => timerRef.current && clearTimeout(timerRef.current), []);
@@ -75,17 +81,18 @@ export default function UpgradePanel({ sessionId, user, settings, onSettingsChan
     if (bet > maxBet) setBet(maxBet);
   }, [maxBet, bet]);
 
-  const clampChance = (c) => Math.max(0.01, Math.min(MAX_CHANCE, c));
-  const effectiveChance = target && totalBet > 0 && targetPriceNum > 0 ? clampChance(totalBet / targetPriceNum) : chance;
+  const clampChance = (c) => Math.max(cfg.min_chance, Math.min(MAX_CHANCE, c));
+  // shown chance already includes the house edge: bet / price * RTP
+  const effectiveChance = target && totalBet > 0 && targetPriceNum > 0 ? clampChance((totalBet / targetPriceNum) * RTP) : chance;
 
   const applyQuick = (c) => {
     playTick(settings.sound);
     setChance(c);
-    if (target && targetPriceNum > 0) setBet(Math.max(0, Math.min(maxBet, Math.round((targetPriceNum * c - skinsTotal) * 100) / 100)));
+    if (target && targetPriceNum > 0) setBet(Math.max(0, Math.min(maxBet, Math.round(((targetPriceNum * c) / RTP - skinsTotal) * 100) / 100)));
   };
   const pickMultiplier = (x) => {
     setActiveQuick(`x${x}`);
-    applyQuick(clampChance(1 / x));
+    applyQuick(clampChance(RTP / x));
   };
   const pickPercent = (p) => {
     setActiveQuick(`p${p}`);
@@ -212,7 +219,7 @@ export default function UpgradePanel({ sessionId, user, settings, onSettingsChan
           data-testid="upgrade-button"
         >
           <Logo size={16} />
-          {spinning ? "Крутим..." : !authUser ? "Войти через Discord" : !target ? "Выберите скин" : overLimit ? "Ставка выше 75% цели" : "Прокачать"}
+          {spinning ? "Крутим..." : !authUser ? "Войти через Discord" : !target ? "Выберите скин" : overLimit ? `Ставка выше ${Math.round(MAX_RATIO * 100)}% цели` : "Прокачать"}
         </button>
 
         <div className="blox-panel min-h-11 px-2 py-1.5 flex flex-wrap items-center justify-between gap-2 col-span-2 lg:col-span-1 order-6 lg:order-none" data-testid="quick-pick">

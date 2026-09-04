@@ -28,6 +28,7 @@ export const discordLoginUrl = `${API}/auth/discord/login`;
 export const api = {
   presence: (session_id) => http.post(`/presence`, { session_id }).then((r) => r.data),
   stats: () => http.get(`/stats`).then((r) => r.data),
+  gameConfig: () => http.get(`/game-config`).then((r) => r.data),
   user: (session_id) => http.get(`/user/${session_id}`).then((r) => r.data),
   me: () => http.get(`/auth/me`).then((r) => r.data),
   logout: () => http.post(`/auth/logout`).then((r) => r.data),

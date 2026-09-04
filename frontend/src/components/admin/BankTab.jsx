@@ -22,9 +22,7 @@ const Stat = ({ label, value, tone = "", testId, hint }) => (
 );
 
 const SETTINGS = [
-  { key: "rtp_target", label: "Общий RTP", hint: "Доля всех ставок, возвращаемая игрокам. Жёсткий лимит для всего казино.", min: 50, max: 100, fmt: (v) => `${v}%`, to: (v) => v / 100, from: (v) => Math.round(v * 100) },
-  { key: "drain_chance", label: "Базовый шанс слива", hint: "Вероятность, что депозит игрока «судьба» сольёт в 0. После каждого слива подряд шанс падает (×0.7), после крупного выигрыша — растёт. При пустом банке слив почти всегда.", min: 10, max: 90, fmt: (v) => `${v}%`, to: (v) => v / 100, from: (v) => Math.round(v * 100) },
-  { key: "max_multiplier", label: "Максимальный множитель", hint: "Самый удачный исход депозита: ×1.5, ×2, ×3, ×4, ×6, ×8, ×10 (чем больше — тем реже). Выше этого не выпадает.", min: 15, max: 100, fmt: (v) => `×${(v / 10).toFixed(1)}`, to: (v) => v / 10, from: (v) => Math.round(v * 10) },
+  { key: "rtp_target", label: "RTP (доля возврата игрокам)", hint: "Комиссия казино = 100% − RTP. Заложена прямо в шанс: при ставке 50% от цены скина игрок видит и получает шанс 45% (при RTP 90%). Никаких скрытых отмен выигрышей.", min: 50, max: 100, fmt: (v) => `${v}% · комиссия ${100 - v}%`, to: (v) => v / 100, from: (v) => Math.round(v * 100) },
 ];
 
 const SettingRow = ({ s, value, onSaved }) => {
@@ -122,21 +120,21 @@ export default function BankTab() {
   return (
     <div className="space-y-4" data-testid="bank-tab">
       <div className={`rounded-lg px-3 py-2.5 text-[12px] leading-snug border ${safe ? "bg-[#2ecc71]/10 border-[#2ecc71]/40 text-[#9be7b8]" : "bg-[#ff5c5c]/10 border-[#ff5c5c]/40 text-[#ff9b9b]"}`} data-testid="bank-status-banner">
-        <b>Защита банка всегда включена.</b> Выигрыш выдаётся только если после него банк ≥ всех обязательств перед игроками и общий RTP не превысит {Math.round(settings.rtp_target * 100)}%. Иначе игрок проигрывает — для него это обычный проигрыш.
+        <b>Честная модель с фиксированной комиссией {Math.round((1 - settings.rtp_target) * 100)}%.</b> Комиссия заложена в шанс (шанс = ставка / цена × {Math.round(settings.rtp_target * 100)}%), рулетка честная, выигрыши не отменяются. Единственная защита — платёжеспособность: скин, который банк не сможет выдать (банк − обязательства &lt; цена), нельзя выбрать для апгрейда. В минус казино уйти не может.
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <Stat label="Банк (реальные скины)" value={<>{formatMoney(bank)} <RobuxIcon size={14} /></>} tone="text-[#ffb000]" testId="bank-balance" hint="Σ депозитов − Σ выданных скинов ± правки" />
         <Stat label="Обязательства игрокам" value={<>{formatMoney(liabilities.total)} <RobuxIcon size={14} /></>} testId="bank-liabilities" hint={`балансы ${formatMoney(liabilities.balances)} · инвентари ${formatMoney(liabilities.inventory)} · на выводе ${formatMoney(liabilities.pending_withdrawals)}`} />
         <Stat label="Чистая позиция (прибыль)" value={<>{net >= 0 ? "+" : ""}{formatMoney(net)} <RobuxIcon size={14} /></>} tone={safe ? "text-[#2ecc71]" : "text-[#ff5c5c]"} testId="bank-net" hint="банк − обязательства" />
-        <Stat label="Фактический RTP" value={pct(rtp.rtp)} tone={rtp.rtp <= settings.rtp_target ? "text-[#2ecc71]" : "text-[#ff5c5c]"} testId="bank-rtp-actual" hint={`цель ${Math.round(settings.rtp_target * 100)}% · поставлено ${formatMoney(rtp.wagered)} · выдано ${formatMoney(rtp.paid)}`} />
+        <Stat label="Фактический RTP" value={pct(rtp.rtp)} tone={rtp.rtp <= settings.rtp_target + 0.05 ? "text-[#2ecc71]" : "text-[#ffb000]"} testId="bank-rtp-actual" hint={`цель ${Math.round(settings.rtp_target * 100)}% (сходится на большом числе игр) · поставлено ${formatMoney(rtp.wagered)} · выдано ${formatMoney(rtp.paid)}`} />
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <Stat label="Всего задепозитили" value={<>{formatMoney(data.deposits_total)} <RobuxIcon size={12} /></>} testId="bank-deposits-total" />
         <Stat label="Всего выведено скинов" value={<>{formatMoney(data.withdrawals_total)} <RobuxIcon size={12} /></>} testId="bank-withdrawals-total" />
         <Stat label="Игр / побед" value={`${games.total} / ${games.wins}`} testId="bank-games" />
-        <Stat label="Принудительных сливов" value={games.forced_losses} tone="text-[#ff8a8a]" testId="bank-forced-losses" hint={`банк ${games.forced_by?.bank || 0} · RTP ${games.forced_by?.rtp || 0} · игрок ${games.forced_by?.player || 0}`} />
+        <Stat label="Принудительных сливов" value={games.forced_losses} tone="text-[#ff8a8a]" testId="bank-forced-losses" hint={`старая система: ${games.forced_by?.player || 0} игрок · ${games.forced_by?.rtp || 0} RTP · ${games.forced_by?.bank || 0} банк. Новая модель их не создаёт`} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">

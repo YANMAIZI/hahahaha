@@ -54,3 +54,4 @@
 - Full production reset performed (bank 0, all players/games/ledger wiped; shop_items kept). Reusable script: `python3 /app/backend/tests/reset_all.py`.
 - Live feed: 210px, hidden scrollbar, hover slides in winner avatar+nick (bottom→top), click → /users/{discord_id}. Public profile page + personal link in /profile & header menu.
 - Promo XYIPACHOSIK: +6.7% deposit, gold_nick=true (gold shimmer nickname everywhere). Public payloads exclude session_id.
+- Payout model rewritten: fixed house edge (RTP 0.90 admin-configurable) baked into shown chance = bet/price×RTP; honest roll, no luck cycles / forced losses. Only guard: pre-spin solvency (bank − liabilities + bet ≥ prize) → 400 refusal. GET /api/game-config feeds frontend chance math. Old luck_cycles dropped.

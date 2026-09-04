@@ -24,7 +24,7 @@ export default function PlayersTab() {
   return (
     <div className="space-y-3" data-testid="players-tab">
       <div className="rounded-lg bg-[#00a2ff]/10 border border-[#00a2ff]/40 px-3 py-2.5 text-[12px] text-[#b4d9ff] leading-snug" data-testid="players-hint">
-        При каждом подтверждённом депозите игроку случайно выпадает «судьба»: <b>слив</b> (уйдёт почти в 0) или <b>множитель</b> ×1.5…×10 — столько он максимум сможет выиграть с этого депозита. Пока лимит не исчерпан, рулетка полностью честная; после — везение заканчивается. Сливы подряд снижают шанс следующего слива, крупный выигрыш — повышает. Настраивать вручную ничего не нужно.
+        Модель честная: комиссия казино заложена в шанс (ставка / цена × RTP), выигрыши не отменяются, лимитов и «судьбы» на игрока нет. Личный RTP отдельных игроков может быть выше 100% — это нормально, в сумме по всем игрокам он сходится к целевому. Колонка «сливов» показывает только отказы старой системы.
       </div>
       {rows.length === 0 && <div className="blox-panel h-[160px] flex items-center justify-center text-[13px] text-[#5f6377]" data-testid="players-empty">Игр пока не было</div>}
       {rows.length > 0 && (
@@ -37,7 +37,6 @@ export default function PlayersTab() {
                 <th className="px-3 py-2">Поставил</th>
                 <th className="px-3 py-2">Выиграл</th>
                 <th className="px-3 py-2">Личный RTP</th>
-                <th className="px-3 py-2">Судьба депозита</th>
                 <th className="px-3 py-2">Игр / побед / сливов</th>
                 <th className="px-3 py-2">На руках</th>
                 <th className="px-3 py-2">Вывел</th>
@@ -56,14 +55,6 @@ export default function PlayersTab() {
                   <td className="px-3 py-2"><Money v={r.wagered} /></td>
                   <td className="px-3 py-2"><Money v={r.paid} /></td>
                   <td className={`px-3 py-2 font-black ${r.rtp > 1 ? "text-[#ff8a8a]" : "text-[#2ecc71]"}`} data-testid="players-rtp">{pct(r.rtp)}</td>
-                  <td className="px-3 py-2" data-testid="players-cycle">
-                    {r.cycle ? (
-                      <div>
-                        <span className={`font-black ${r.cycle.kind === "drain" ? "text-[#ff8a8a]" : "text-[#ffb000]"}`}>{r.cycle.kind === "drain" ? "слив" : `×${r.cycle.multiplier}`}</span>
-                        <span className="text-[#8e91a3]"> · выдано {formatMoney(r.cycle.paid)} / {formatMoney(r.cycle.allowance)}</span>
-                      </div>
-                    ) : <span className="text-[#5f6377]">—</span>}
-                  </td>
                   <td className="px-3 py-2 text-[#b4b7c7]">{r.games} / {r.wins} / <span className="text-[#ff8a8a]">{r.forced}</span></td>
                   <td className="px-3 py-2"><Money v={r.balance + r.inventory} /></td>
                   <td className="px-3 py-2"><Money v={r.withdrawn} /></td>
