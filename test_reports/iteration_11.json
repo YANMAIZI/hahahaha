@@ -1,0 +1,36 @@
+{
+  "summary": "Iteration 11 review of BLOXGRADE gold-promo + public-profile + wide live-feed features. Backend: new pytest suite /app/backend/tests/test_iteration11.py (10 tests, 9 pass) covering POST /api/promo/apply (case-insensitive XYIPACHOSIK -> 0.067 + gold_nick, SINZUKU -> 0.10 with gold_nick false for a fresh user, unknown code 400, 401 without JWT), GET /api/live-drops enrichment (avatar/discord_id/gold_nick, limit clamp) and GET /api/users/{discord_id} (full payload, stats, best_drop correctness, no balance exposure, 404 for unknown). Frontend: Playwright on the public URL with JWT in localStorage - live-drop-feed is exactly 210px, no-scrollbar, wheel-scrollable (scrollTop 0->400); hover animation verified via computed styles (user face opacity 1 / transform none, item face opacity 0 / translateY(-110%)), live-drop-nickname='Tester' data-gold='true'; card click -> /users/1 and public-profile-page with all stat blocks, id, copy-link; /users/doesnotexist -> public-profile-error 'Игрок не найден'; /profile gold nick + profile-gold-badge + profile-copy-link copies full URL; header profile-nickname gold and menu-public-profile-link -> /users/1; mobile (390px) live-drop-strip renders with the same clickable cards and sidebar hidden. Only real defects found are a stale/empty promo input on /profile and public exposure of internal session_id in drop payloads.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/users/{discord_id} (and GET /api/live-drops)", "issue": "Public responses expose internal session_id because the Drop model is returned as-is (drops[] and best_drop each contain session_id: 'discord_test_1'). Should be excluded from public payloads (response_model_exclude or a PublicDrop model). Test test_drops_have_no_session_id_leak fails on this."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "PromoInput (ProfilePage, compact)", "issue": "Applied promo code is not shown on /profile: input renders empty with placeholder 'Введите промокод' although user has XYIPACHOSIK. Cause: useState(authUser?.promo_code) initialises before authUser resolves and is never re-synced (no useEffect). Inside TopUpModal it works (mounts later) and correctly shows 'XYIPACHOSIK' + '+6,7% К ДЕПОЗИТУ'.", "selector": "[data-testid='promo-input']", "priority": "MEDIUM"},
+      {"component": "PromoInput (ProfilePage)", "issue": "Requested '+6,7% к депозиту' text is NOT visible on /profile - the promo-bonus banner is gated behind !compact, and ProfilePage passes compact. Verified correct (+6,7%, not rounded to 7%) only in the top-up modal.", "selector": "[data-testid='promo-bonus']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_iteration11.py", "/app/test_reports/pytest/iteration11.xml"],
+  "action_items": [
+    "Exclude session_id from public drop payloads in GET /api/users/{discord_id} and GET /api/live-drops.",
+    "Sync PromoInput local state with authUser.promo_code via useEffect so /profile shows the active code (green check state).",
+    "Decide whether the '+6,7% к депозиту' banner should also render in the compact /profile PromoInput (spec asked for it there)."
+  ],
+  "critical_code_review_comments": [
+    "Drop pydantic model is reused for public endpoints; introduce a public projection instead of leaking session_id.",
+    "PromoInput derives state from props/context only at mount - classic stale-initial-state bug; use useEffect or key the component on authUser?.promo_code.",
+    "public_profile() loads up to 5000 upgrades and 5000 withdrawn history docs per request just to count them; use count_documents/aggregation to avoid O(n) payloads as users grow."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration11.py"],
+  "success_rate": {"backend": "90%", "frontend": "95%"},
+  "seed_data_creation": "Temporarily created Mongo user session_id 'discord_test_2' (discord_id '2', Tester2) for the SINZUKU regression check; deleted afterwards along with its drops (verified 0 docs). discord_test_1 untouched except promo re-apply (already XYIPACHOSIK). No other users, bank or upgrades touched; reset_all.py NOT run.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "JWT minted for session_id discord_test_1 per /app/memory/test_credentials.md; localStorage key 'bloxgrade_token'",
+  "context_for_next_testing_agent": "Reusable suite: /app/backend/tests/test_iteration11.py (requires discord_test_1 with 3 skins + >=8 drops; creates/deletes discord_test_2 itself). Note pytest.ini runs xdist loadscope - do not pass -n/-p no:xdist. Live feed sidebar offsetWidth(210)-clientWidth(209)=1px is the right border, not a scrollbar. Site is LIVE: never run reset_all.py.",
+  "rca_of_the_issue": "Empty promo field on /profile: PromoInput calls useState(authUser?.promo_code || '') on first render, when useAuth has not yet resolved /api/auth/me, so the initial value is '' and no effect re-syncs it; TopUpModal mounts on demand after auth resolves, hence it displays the code correctly. session_id leak: public endpoints serialize the full internal Drop model."
+}

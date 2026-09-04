@@ -5,7 +5,7 @@ import { BoxesIcon } from "./icons/boxes";
 import { FileTextIcon } from "./icons/file-text";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
-import { api } from "../lib/api";
+import { api, pct } from "../lib/api";
 import { useAuth } from "../hooks/useAuth";
 import AmountStep from "./topup/AmountStep";
 import ReceiverStep from "./topup/ReceiverStep";
@@ -15,6 +15,9 @@ export const PromoInput = ({ compact = false }) => {
   const { authUser, setAuthUser } = useAuth();
   const [code, setCode] = useState(authUser?.promo_code || "");
   const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (authUser?.promo_code) setCode(authUser.promo_code);
+  }, [authUser?.promo_code]);
   const active = authUser?.promo_code && authUser.promo_code === code.trim().toUpperCase();
 
   const apply = async () => {
@@ -23,7 +26,7 @@ export const PromoInput = ({ compact = false }) => {
     try {
       const u = await api.applyPromo(code.trim());
       setAuthUser(u);
-      toast.success(`Промокод ${u.promo_code} активирован: +${Math.round(u.promo_bonus * 100)}% к пополнению`);
+      toast.success(`Промокод ${u.promo_code} активирован: +${pct(u.promo_bonus)}% к пополнению`);
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Промокод не найден");
     } finally {
@@ -54,7 +57,7 @@ export const PromoInput = ({ compact = false }) => {
       </div>
       {authUser?.promo_bonus > 0 && !compact && (
         <div className="mt-2 h-8 rounded-md bg-[#ffb000]/15 text-[#ffb000] text-[12px] font-bold flex items-center justify-center uppercase tracking-wide" data-testid="promo-bonus">
-          +{Math.round(authUser.promo_bonus * 100)}% к депозиту
+          +{pct(authUser.promo_bonus)}% к депозиту
         </div>
       )}
     </div>

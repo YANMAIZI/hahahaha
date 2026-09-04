@@ -13,6 +13,8 @@ import { SkinCard } from "../components/SkinsSection";
 import TopUpModal, { PromoInput, DepositStatus } from "../components/TopUpModal";
 import { WalletIcon as PayIcon } from "../components/icons/wallet";
 import RobloxLinkCard from "../components/RobloxLinkCard";
+import Nick from "../components/Nick";
+import { LinkIcon } from "../components/icons/link";
 import { useAuth } from "../hooks/useAuth";
 import { useSessionCtx } from "../hooks/useSessionCtx";
 import { api, formatMoney, inventoryTotal } from "../lib/api";
@@ -97,10 +99,22 @@ export default function ProfilePage() {
             <div className="flex items-center gap-4">
               {authUser?.avatar && <img src={authUser.avatar} alt="" className="w-16 h-16 rounded-lg object-cover" data-testid="profile-page-avatar" />}
               <div className="min-w-0">
-                <div className="font-bold text-[15px] truncate" data-testid="profile-page-nickname">{authUser?.nickname}</div>
+                <Nick gold={authUser?.gold_nick} className="font-bold text-[15px] truncate block" testId="profile-page-nickname">{authUser?.nickname}</Nick>
                 <div className="mt-1 inline-flex items-center text-[11px] text-[#8e91a3] bg-[#1c1d25] rounded px-2 py-0.5" data-testid="profile-page-id">ID {authUser?.discord_id}</div>
+                {authUser?.gold_nick && <div className="mt-1 text-[10px] font-bold text-[#ffb000]" data-testid="profile-gold-badge">★ Золотой ник</div>}
               </div>
             </div>
+            <button
+              onClick={() => {
+                navigator.clipboard?.writeText(`${window.location.origin}/users/${authUser?.discord_id}`);
+                toast.success("Ссылка на профиль скопирована");
+              }}
+              className="h-9 rounded-lg bg-[#1c1d25] hover:bg-[#22242e] text-[12px] font-bold text-[#c9ccd8] flex items-center justify-center gap-2 px-3 transition-colors"
+              title={`${window.location.origin}/users/${authUser?.discord_id}`}
+              data-testid="profile-copy-link"
+            >
+              <LinkIcon size={13} /> <span className="truncate">/users/{authUser?.discord_id}</span>
+            </button>
             <RobloxLinkCard />
           </div>
 

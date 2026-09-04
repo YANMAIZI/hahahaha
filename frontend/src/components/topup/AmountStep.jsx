@@ -3,7 +3,7 @@ import { toast } from "sonner";
 import { CheckIcon } from "../icons/check";
 import { TicketIcon } from "../icons/ticket";
 import { RobuxIcon } from "../Logo";
-import { api, formatMoney, DEPOSIT_FEE } from "../../lib/api";
+import { api, formatMoney, DEPOSIT_FEE, pct } from "../../lib/api";
 import { useAuth } from "../../hooks/useAuth";
 
 const QUICK = [50, 100, 250, 500, 1000];
@@ -27,7 +27,7 @@ export default function AmountStep({ minRap, rap, setRap, onNext }) {
     try {
       const u = await api.applyPromo(code.trim());
       setAuthUser(u);
-      toast.success(`Промокод ${u.promo_code}: +${Math.round(u.promo_bonus * 100)}% к депозиту`);
+      toast.success(`Промокод ${u.promo_code}: +${pct(u.promo_bonus)}% к депозиту`);
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Промокод не найден");
     } finally {
@@ -79,7 +79,7 @@ export default function AmountStep({ minRap, rap, setRap, onNext }) {
       </div>
       {bonus > 0 && (
         <div className="h-8 rounded-md bg-[#ffb000]/15 text-[#ffb000] text-[12px] font-bold flex items-center justify-center uppercase tracking-wide" data-testid="promo-bonus">
-          +{Math.round(bonus * 100)}% к депозиту
+          +{pct(bonus)}% к депозиту
         </div>
       )}
 
@@ -101,7 +101,7 @@ export default function AmountStep({ minRap, rap, setRap, onNext }) {
           </>
         )}
       </button>
-      <div className="text-[11px] text-[#5f6377] text-center leading-snug">На баланс придёт {Math.round((1 - DEPOSIT_FEE) * 100)}% от RAP скина{bonus > 0 ? ` +${Math.round(bonus * 100)}% по промокоду` : ""}. Итоговую сумму подтверждает админ после получения скина.</div>
+      <div className="text-[11px] text-[#5f6377] text-center leading-snug">На баланс придёт {Math.round((1 - DEPOSIT_FEE) * 100)}% от RAP скина{bonus > 0 ? ` +${pct(bonus)}% по промокоду` : ""}. Итоговую сумму подтверждает админ после получения скина.</div>
     </div>
   );
 }

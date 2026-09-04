@@ -4,6 +4,7 @@ import { ChevronDownIcon } from "./icons/chevron-down";
 import { LogoutIcon } from "./icons/logout";
 import { FileTextIcon } from "./icons/file-text";
 import { UserIcon } from "./icons/user";
+import { LinkIcon } from "./icons/link";
 import { Logo, RobuxIcon, VkIcon } from "./Logo";
 import AnimButton from "./AnimButton";
 import DiscordButton from "./DiscordButton";
@@ -22,6 +23,7 @@ import {
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
 import TopUpModal from "./TopUpModal";
+import Nick from "./Nick";
 
 const StatBlock = ({ label, value, icon, mobile = false }) => (
   <div className={`${mobile ? "flex" : "hidden md:flex"} items-center gap-2`}>
@@ -38,9 +40,9 @@ const ProfileMenu = ({ authUser, onLogout }) => (
     <DropdownMenuTrigger asChild>
       <button className="blox-chip h-9 pl-1 pr-2.5 flex items-center gap-2 text-white font-bold text-sm" data-testid="profile-button">
         <img src={authUser.avatar} alt={authUser.nickname} className="w-7 h-7 rounded-md object-cover" data-testid="profile-avatar" />
-        <span className="hidden sm:block max-w-[110px] truncate" data-testid="profile-nickname">
+        <Nick gold={authUser.gold_nick} className="hidden sm:block max-w-[110px] truncate" testId="profile-nickname">
           {authUser.nickname}
-        </span>
+        </Nick>
         <ChevronDownIcon size={14} className="text-[#8e91a3]" />
       </button>
     </DropdownMenuTrigger>
@@ -49,7 +51,7 @@ const ProfileMenu = ({ authUser, onLogout }) => (
       <div className="px-2 pb-2 flex items-center gap-2">
         <img src={authUser.avatar} alt="" className="w-8 h-8 rounded-md" />
         <div className="min-w-0">
-          <div className="font-bold text-sm truncate">{authUser.nickname}</div>
+          <Nick gold={authUser.gold_nick} className="font-bold text-sm truncate block">{authUser.nickname}</Nick>
           <div className="text-[10px] text-[#8e91a3]">ID: {authUser.discord_id}</div>
         </div>
       </div>
@@ -57,6 +59,11 @@ const ProfileMenu = ({ authUser, onLogout }) => (
       <DropdownMenuItem asChild className="focus:bg-[#22242e] focus:text-white cursor-pointer">
         <Link to="/profile" data-testid="menu-profile-link">
           <UserIcon size={14} className="mr-2" /> Профиль
+        </Link>
+      </DropdownMenuItem>
+      <DropdownMenuItem asChild className="focus:bg-[#22242e] focus:text-white cursor-pointer">
+        <Link to={`/users/${authUser.discord_id}`} data-testid="menu-public-profile-link">
+          <LinkIcon size={14} className="mr-2" /> Моя публичная страница
         </Link>
       </DropdownMenuItem>
       <DropdownMenuItem asChild className="focus:bg-[#22242e] focus:text-white cursor-pointer">

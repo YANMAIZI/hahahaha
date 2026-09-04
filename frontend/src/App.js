@@ -14,6 +14,7 @@ import { SessionProvider, useSessionCtx } from "./hooks/useSessionCtx";
 import TosPage from "./pages/TosPage";
 import AuthCallbackPage from "./pages/AuthCallbackPage";
 import ProfilePage from "./pages/ProfilePage";
+import PublicProfilePage from "./pages/PublicProfilePage";
 import AdminPage from "./pages/AdminPage";
 
 // Header + live-drop feed shared by every page
@@ -102,6 +103,7 @@ function App() {
               <Route path="/" element={<Home />} />
               <Route path="/tos" element={<TosPage />} />
               <Route path="/profile" element={<ProfilePage />} />
+              <Route path="/users/:discordId" element={<PublicProfilePage />} />
             </Route>
             <Route path="/auth/callback" element={<AuthCallbackPage />} />
             <Route path="/admin" element={<AdminPage />} />

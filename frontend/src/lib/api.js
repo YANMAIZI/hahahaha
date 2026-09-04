@@ -37,6 +37,7 @@ export const api = {
   depositInfo: () => http.get(`/deposit/info`).then((r) => r.data),
   applyPromo: (code) => http.post(`/promo/apply`, { code }).then((r) => r.data),
   profile: () => http.get(`/profile`).then((r) => r.data),
+  publicProfile: (discordId) => http.get(`/users/${discordId}`).then((r) => r.data),
   saveRoblox: (payload) => http.post(`/profile/roblox`, payload).then((r) => r.data),
   createDeposit: (payload) => http.post(`/deposits`, payload).then((r) => r.data),
   cancelDeposit: (id) => http.post(`/deposits/${id}/cancel`).then((r) => r.data),
@@ -52,6 +53,8 @@ export const formatMoney = (n) =>
   new Intl.NumberFormat("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(n) || 0);
 
 export const inventoryTotal = (skins) => (skins || []).reduce((a, s) => a + Number(s.price || 0), 0);
+
+export const pct = (frac) => String(Math.round(Number(frac || 0) * 1000) / 10).replace(".", ",");
 
 const ADMIN_KEY = "bloxgrade_admin_token";
 export const getAdminToken = () => sessionStorage.getItem(ADMIN_KEY);

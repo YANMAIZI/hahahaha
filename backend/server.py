@@ -106,6 +106,7 @@ class UserOut(BaseModel):
     promo_bonus: float = 0.0
     roblox_nick: Optional[str] = None
     roblox_link: Optional[str] = None
+    gold_nick: bool = False
 
 
 class RobloxIn(BaseModel):
@@ -157,6 +158,9 @@ class Drop(BaseModel):
     item_image: Optional[str] = None
     item_rarity: Optional[str] = None
     chance: float
+    avatar: Optional[str] = None
+    discord_id: Optional[str] = None
+    gold_nick: bool = False
     created_at: datetime = Field(default_factory=now_utc)
 
 
@@ -191,6 +195,7 @@ def to_user_out(user: dict) -> UserOut:
         promo_bonus=float(user.get("promo_bonus") or 0),
         roblox_nick=user.get("roblox_nick"),
         roblox_link=user.get("roblox_link"),
+        gold_nick=bool(user.get("gold_nick")),
     )
 
 
@@ -288,7 +293,8 @@ async def record_admin_fail(ip: str) -> None:
             await db.login_attempts.update_one({"identifier": key}, {"$inc": {"fails": 1}})
 
 
-PROMO_CODES = {"SINZUKU": 0.10}
+PROMO_CODES = {"SINZUKU": 0.10, "XYIPACHOSIK": 0.067}
+GOLD_PROMOS = {"XYIPACHOSIK"}
 DEPOSIT_FEE = 0.20
 MIN_DEPOSIT_RAP = 20
 DEPOSIT_COOLDOWN_SECONDS = 60
@@ -622,8 +628,11 @@ async def promo_apply(payload: PromoIn, request: Request):
     bonus = PROMO_CODES.get(code)
     if bonus is None:
         raise HTTPException(status_code=400, detail="Промокод не найден")
-    await db.users.update_one({"session_id": user["session_id"]}, {"$set": {"promo_code": code, "promo_bonus": bonus}})
-    user.update({"promo_code": code, "promo_bonus": bonus})
+    changes = {"promo_code": code, "promo_bonus": bonus}
+    if code in GOLD_PROMOS:
+        changes["gold_nick"] = True
+    await db.users.update_one({"session_id": user["session_id"]}, {"$set": changes})
+    user.update(changes)
     return to_user_out(user)
 
 
@@ -954,11 +963,49 @@ async def admin_bank_adjust(payload: BankAdjustIn, request: Request):
     return {"ok": True, "bank": bank}
 
 
-@api_router.get("/live-drops", response_model=List[Drop])
+@api_router.get("/live-drops")
 async def live_drops(limit: int = 30):
     limit = max(1, min(limit, 100))
     docs = await db.drops.find({}, {"_id": 0}).sort("created_at", -1).to_list(limit)
-    return [Drop(**d) for d in docs]
+    sids = list({d["session_id"] for d in docs})
+    users = {u["session_id"]: u async for u in db.users.find({"session_id": {"$in": sids}}, {"_id": 0, "session_id": 1, "nickname": 1, "avatar": 1, "discord_id": 1, "gold_nick": 1})}
+    out = []
+    for d in docs:
+        u = users.get(d["session_id"])
+        if u:
+            d.update({"nickname": u.get("nickname") or d.get("nickname"), "avatar": u.get("avatar"), "discord_id": u.get("discord_id"), "gold_nick": bool(u.get("gold_nick"))})
+        out.append(Drop(**d).model_dump(exclude={"session_id"}))
+    return out
+
+
+@api_router.get("/users/{discord_id}")
+async def public_profile(discord_id: str):
+    user = await db.users.find_one({"discord_id": discord_id}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="Игрок не найден")
+    sid = user["session_id"]
+    upgrades = await db.upgrades.find({"session_id": sid}, {"_id": 0, "win": 1}).to_list(5000)
+    drops = await db.drops.find({"session_id": sid}, {"_id": 0}).sort("created_at", -1).to_list(24)
+    best = await db.drops.find({"session_id": sid}, {"_id": 0}).sort("item_price", -1).to_list(1)
+    withdrawn = await db.item_history.find({"session_id": sid, "kind": "withdrawn"}, {"_id": 0, "price": 1}).to_list(5000)
+    skins = user.get("skins", [])
+    return {
+        "nickname": user.get("nickname", "Player"),
+        "avatar": user.get("avatar"),
+        "discord_id": discord_id,
+        "gold_nick": bool(user.get("gold_nick")),
+        "created_at": user.get("created_at"),
+        "stats": {
+            "upgrades": len(upgrades),
+            "wins": sum(1 for u in upgrades if u.get("win")),
+            "withdrawn_count": len(withdrawn),
+            "withdrawn_sum": sum(float(h.get("price") or 0) for h in withdrawn),
+            "inventory_count": len(skins),
+            "inventory_value": sum(float(s.get("price") or 0) for s in skins),
+        },
+        "best_drop": Drop(**best[0]).model_dump(exclude={"session_id"}) if best else None,
+        "drops": [Drop(**d).model_dump(exclude={"session_id"}) for d in drops],
+    }
 
 
 @api_router.get("/shop")
@@ -1092,6 +1139,9 @@ async def upgrade(payload: UpgradeIn, request: Request):
                 item_image=target.get("image"),
                 item_rarity=target.get("rarity"),
                 chance=chance,
+                avatar=user.get("avatar"),
+                discord_id=user.get("discord_id"),
+                gold_nick=bool(user.get("gold_nick")),
             )
             await db.drops.insert_one(drop.model_dump())
             await db.users.update_one(

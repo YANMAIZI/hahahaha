@@ -52,3 +52,5 @@
 - Total inventory value shown in "Мои скины" panel header (main page, top-right of panel) and in profile (balance block + inventory tab bar).
 - Profile inventory: removed "Выбрать для продажи" switch; clicking an item reveals two solid-color buttons «Продать · price» (gold) and «Вывести» (light); "Продать всё · total" kept.
 - Full production reset performed (bank 0, all players/games/ledger wiped; shop_items kept). Reusable script: `python3 /app/backend/tests/reset_all.py`.
+- Live feed: 210px, hidden scrollbar, hover slides in winner avatar+nick (bottom→top), click → /users/{discord_id}. Public profile page + personal link in /profile & header menu.
+- Promo XYIPACHOSIK: +6.7% deposit, gold_nick=true (gold shimmer nickname everywhere). Public payloads exclude session_id.
