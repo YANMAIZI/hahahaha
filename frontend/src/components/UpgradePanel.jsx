@@ -64,6 +64,7 @@ export default function UpgradePanel({ sessionId, user, settings, onSettingsChan
   const [rotation, setRotation] = useState(180);
   const [spinning, setSpinning] = useState(false);
   const [result, setResult] = useState(null);
+  const [lockedChance, setLockedChance] = useState(null);
   const timerRef = useRef(null);
   const busyRef = useRef(false);
 
@@ -80,6 +81,17 @@ export default function UpgradePanel({ sessionId, user, settings, onSettingsChan
   useEffect(() => {
     if (bet > maxBet) setBet(maxBet);
   }, [maxBet, bet]);
+  // new target or new bet skins = new game: unlock the zone (never while the wheel is spinning)
+  const targetKey = `${target?.id || ""}|${betSkins.map((s) => s.uid).join(",")}`;
+  const prevKey = useRef(targetKey);
+  const settleUntil = useRef(0);
+  useEffect(() => {
+    if (prevKey.current !== targetKey && !busyRef.current && Date.now() > settleUntil.current) {
+      setLockedChance(null);
+      setResult(null);
+    }
+    prevKey.current = targetKey;
+  }, [targetKey]);
 
   const clampChance = (c) => Math.max(cfg.min_chance, Math.min(MAX_CHANCE, c));
   // shown chance already includes the house edge: bet / price * RTP
@@ -87,6 +99,8 @@ export default function UpgradePanel({ sessionId, user, settings, onSettingsChan
 
   const applyQuick = (c) => {
     playTick(settings.sound);
+    setLockedChance(null);
+    setResult(null);
     setChance(c);
     if (target && targetPriceNum > 0) setBet(Math.max(0, Math.min(maxBet, Math.round(((targetPriceNum * c) / RTP - skinsTotal) * 100) / 100)));
   };
@@ -118,11 +132,14 @@ export default function UpgradePanel({ sessionId, user, settings, onSettingsChan
         chance: effectiveChance,
       });
       // zone is fixed at the bottom (180deg); pointer keeps accumulating turns and lands at 180 + angle
+      // the zone is drawn from the server's chance until the player changes the bet — pointer and zone always agree
+      setLockedChance(res.chance);
       setRotation((r) => r + 4 * 360 + (((180 + res.angle - r) % 360) + 360) % 360);
       const duration = settings.fastSpin ? 2000 : 5000;
       timerRef.current = setTimeout(() => {
         setSpinning(false);
         busyRef.current = false;
+        settleUntil.current = Date.now() + 1500; // parent clears skins/target right after — keep the zone frozen
         setResult(res.win ? "win" : "lose");
         playTick(settings.sound);
         onUpgraded && onUpgraded(res);
@@ -175,7 +192,7 @@ export default function UpgradePanel({ sessionId, user, settings, onSettingsChan
         </div>
 
         <div className="col-span-2 lg:col-span-1 flex items-center justify-center order-1 lg:order-none">
-          <Gauge chance={effectiveChance} rotation={rotation} spinning={spinning} fast={settings.fastSpin} result={result} />
+          <Gauge chance={lockedChance ?? effectiveChance} rotation={rotation} spinning={spinning} fast={settings.fastSpin} result={result} />
         </div>
 
         <div className="blox-panel relative overflow-hidden h-[230px] sm:h-[300px] px-3 sm:px-4 pt-4 sm:pt-5 pb-3 sm:pb-4 flex flex-col order-3 lg:order-none" data-testid="target-panel">
@@ -207,7 +224,7 @@ export default function UpgradePanel({ sessionId, user, settings, onSettingsChan
             max={Math.max(maxBet, 0.01)}
             step={0.01}
             disabled={maxBet <= 0 || spinning}
-            onValueChange={(v) => setBet(Number(v[0]))}
+            onValueChange={(v) => { setLockedChance(null); setResult(null); setBet(Number(v[0])); }}
             className="w-full [&_[role=slider]]:h-3.5 [&_[role=slider]]:w-3.5 [&_[role=slider]]:bg-[#00a2ff] [&_[role=slider]]:border-[#00a2ff] [&_.bg-primary]:bg-[#00a2ff] [&_.bg-primary\/20]:bg-[#262833]"
           />
         </div>

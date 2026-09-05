@@ -83,7 +83,7 @@ export default function Gauge({ chance, rotation, spinning, fast, result }) {
           <circle cx={CX} cy={CY} r={R} fill="none" stroke="#1b1c24" strokeWidth={STROKE} />
           {half > 0.3 && (
             <>
-              <path d={arcPath(zoneFrom, zoneTo)} stroke="url(#zone-grad)" strokeWidth={STROKE + 10} fill="none" opacity="0.45" strokeLinecap="butt" filter="url(#zone-glow)" />
+              {half > 5 && <path d={arcPath(zoneFrom + 4, zoneTo - 4)} stroke="url(#zone-grad)" strokeWidth={STROKE + 10} fill="none" opacity="0.45" strokeLinecap="butt" filter="url(#zone-glow)" />}
               <path d={arcPath(zoneFrom, zoneTo)} stroke="url(#zone-grad)" strokeWidth={STROKE} fill="none" strokeLinecap="butt" />
             </>
           )}
@@ -100,14 +100,12 @@ export default function Gauge({ chance, rotation, spinning, fast, result }) {
         <circle cx={CX} cy={CY} r={R - STROKE / 2 - 1} fill="none" stroke="#0a0b0e" strokeWidth="2" />
         <circle cx={CX} cy={CY} r={R - STROKE / 2 - 18} fill="url(#disc-grad)" stroke="#23242e" strokeWidth="1.5" />
 
-        {/* rotating pointer: starts at the bottom (180deg), points inward */}
+        {/* rotating pointer: a thin needle so the exact landing point is unambiguous */}
         <g className={ringClass} style={{ transform: `rotate(${rotation}deg)` }} data-testid="gauge-pointer">
           <g filter="url(#soft-shadow)">
-            <path
-              d={`M ${CX} ${pTop + STROKE - 3} L ${CX - 9} ${pTop - 6} Q ${CX} ${pTop - 13} ${CX + 9} ${pTop - 6} Z`}
-              fill="url(#pointer-grad)"
-            />
-            <circle cx={CX} cy={pTop - 4.5} r="2.5" fill="#00a2ff" />
+            <line x1={CX} y1={pTop - 2} x2={CX} y2={pTop + STROKE + 2} stroke="#ffffff" strokeWidth="2" strokeLinecap="round" />
+            <path d={`M ${CX} ${pTop + 4} L ${CX - 5} ${pTop - 7} Q ${CX} ${pTop - 12} ${CX + 5} ${pTop - 7} Z`} fill="url(#pointer-grad)" />
+            <circle cx={CX} cy={pTop - 5.5} r="2" fill="#00a2ff" />
           </g>
         </g>
       </svg>

@@ -134,7 +134,7 @@ class AdminConfirmIn(BaseModel):
 
 
 class BankSettingsIn(BaseModel):
-    rtp_target: Optional[float] = Field(default=None, ge=0.5, le=1.0)
+    rtp_target: Optional[float] = Field(default=None, ge=0.75, le=1.0)
 
 
 class BankAdjustIn(BaseModel):
@@ -223,7 +223,7 @@ async def count_online() -> int:
 
 
 async def count_upgrades() -> int:
-    return await db.upgrades.count_documents({})
+    return await db.upgrades.estimated_document_count()
 
 
 def make_token(session_id: str, role: str = "user", hours: int = 24 * 30, extra: Optional[dict] = None) -> str:
@@ -340,6 +340,11 @@ def win_chance(total_bet: float, target_price: float, rtp: float) -> float:
     return min(MAX_CHANCE, total_bet / target_price * rtp)
 
 
+def max_bet_ratio(rtp: float) -> float:
+    """Bet may never exceed the skin price, and never give more than MAX_CHANCE."""
+    return min(1.0, MAX_CHANCE / rtp)
+
+
 async def bank_settings() -> dict:
     doc = await db.bank_settings.find_one({"id": "main"}, {"_id": 0, "id": 0}) or {}
     return {**BANK_DEFAULTS, **doc}
@@ -367,10 +372,16 @@ async def _sum(collection, match: dict, expr) -> float:
 
 
 async def liabilities() -> dict:
-    balances = await _sum(db.users, {}, "$balance")
-    inv = await db.users.aggregate([{"$unwind": "$skins"}, {"$group": {"_id": None, "s": {"$sum": "$skins.price"}}}]).to_list(1)
-    inventory = float(inv[0]["s"]) if inv else 0.0
-    pending = await _sum(db.withdrawals, {"status": "pending"}, "$item.price")
+    # single pass over users: balances + inventory value
+    agg, pending = await asyncio.gather(
+        db.users.aggregate([
+            {"$project": {"balance": {"$ifNull": ["$balance", 0]}, "inv": {"$sum": {"$ifNull": ["$skins.price", []]}}}},
+            {"$group": {"_id": None, "balances": {"$sum": "$balance"}, "inventory": {"$sum": "$inv"}}},
+        ]).to_list(1),
+        _sum(db.withdrawals, {"status": "pending"}, "$item.price"),
+    )
+    balances = float(agg[0]["balances"]) if agg else 0.0
+    inventory = float(agg[0]["inventory"]) if agg else 0.0
     return {"balances": balances, "inventory": inventory, "pending_withdrawals": pending, "total": balances + inventory + pending}
 
 
@@ -382,8 +393,7 @@ async def rtp_stats() -> dict:
 
 async def solvency_headroom() -> tuple:
     """How much prize value the bank can still cover on top of all player liabilities."""
-    bank = await bank_balance()
-    li = await liabilities()
+    bank, li = await asyncio.gather(bank_balance(), liabilities())
     return bank - li["total"], {"bank": bank, "liabilities": li["total"]}
 
 
@@ -391,6 +401,25 @@ def losing_roll(chance: float) -> float:
     r = random.random() * (1 - chance)
     half = 0.5 - chance / 2
     return r + chance if r >= half else r
+
+
+POINTER_CLEARANCE_DEG = 1.5
+
+
+def landing_angle(roll: float, chance: float, win: bool) -> float:
+    """Pointer angle in [-180, 180] (zone is centered at 0). Keeps a small visual gap from the zone edge so the result is never ambiguous."""
+    angle = roll * 360 - 180
+    half = chance * 180
+    sign = 1 if angle >= 0 else -1
+    if win:
+        limit = max(0.0, half - POINTER_CLEARANCE_DEG)
+        if abs(angle) > limit:
+            angle = sign * limit
+    else:
+        limit = min(180.0, half + POINTER_CLEARANCE_DEG)
+        if abs(angle) < limit:
+            angle = sign * limit
+    return round(angle, 4)
 
 
 class bank_lock:
@@ -439,7 +468,7 @@ async def rarities():
 @api_router.get("/game-config")
 async def game_config():
     rtp = float((await bank_settings())["rtp_target"])
-    return {"rtp": rtp, "min_chance": MIN_CHANCE, "max_chance": MAX_CHANCE, "max_bet_ratio": MAX_CHANCE / rtp}
+    return {"rtp": rtp, "min_chance": MIN_CHANCE, "max_chance": MAX_CHANCE, "max_bet_ratio": max_bet_ratio(rtp)}
 
 
 @api_router.post("/presence", response_model=StatsOut)
@@ -883,6 +912,9 @@ async def admin_bank_adjust(payload: BankAdjustIn, request: Request):
     await require_admin(request)
     if abs(payload.amount) < 0.01:
         raise HTTPException(status_code=400, detail="Сумма должна быть не нулевой")
+    current = await bank_balance()
+    if current + payload.amount < -1e-9:
+        raise HTTPException(status_code=400, detail=f"Банк не может уйти в минус: сейчас {current:.2f}, списать можно максимум {max(0.0, current):.2f}")
     bank = await bank_add("adjust", payload.amount, note=payload.note.strip())
     return {"ok": True, "bank": bank}
 
@@ -962,14 +994,17 @@ async def shop(
 async def upgrade(payload: UpgradeIn, request: Request):
     if read_token(request) != payload.session_id:
         raise HTTPException(status_code=401, detail="Войдите через Discord, чтобы играть")
-    user = await get_or_create_user(payload.session_id)
+    if payload.target_item is None or not payload.target_item.get("id"):
+        raise HTTPException(status_code=400, detail="Выберите скин для апгрейда")
+    user, shop_item, settings = await asyncio.gather(
+        get_or_create_user(payload.session_id),
+        db.shop_items.find_one({"id": str(payload.target_item["id"])}, {"_id": 0}),
+        bank_settings(),
+    )
     balance = float(user.get("balance", 0))
 
     if payload.bet_amount <= 0 and not payload.bet_items:
         raise HTTPException(status_code=400, detail="Выберите скины или баланс для апгрейда")
-    if payload.target_item is None or not payload.target_item.get("id"):
-        raise HTTPException(status_code=400, detail="Выберите скин для апгрейда")
-    shop_item = await db.shop_items.find_one({"id": str(payload.target_item["id"])}, {"_id": 0})
     if not shop_item:
         raise HTTPException(status_code=400, detail="Скин для апгрейда не найден")
     if payload.bet_amount > balance + 1e-9:
@@ -988,19 +1023,14 @@ async def upgrade(payload: UpgradeIn, request: Request):
     target_price = float(shop_item.get("price") or 0)
     if target_price <= 0:
         raise HTTPException(status_code=400, detail="Скин для апгрейда недоступен")
-    rtp = float((await bank_settings())["rtp_target"])
-    max_ratio = MAX_CHANCE / rtp
+    rtp = float(settings["rtp_target"])
+    max_ratio = max_bet_ratio(rtp)
     if total_bet > target_price * max_ratio + 1e-6:
         raise HTTPException(status_code=400, detail=f"Ставка не может превышать {round(max_ratio * 100)}% стоимости скина")
     # chance is always derived server-side: bet/price minus the house edge; the client value is ignored
     chance = win_chance(total_bet, target_price, rtp)
     if chance < MIN_CHANCE - 1e-9:
         raise HTTPException(status_code=400, detail="Минимальный шанс — 1%: увеличьте ставку")
-
-    # solvency: refuse a prize the bank cannot cover instead of faking a loss later
-    headroom, solvency = await solvency_headroom()
-    if headroom + total_bet + 1e-9 < target_price:
-        raise HTTPException(status_code=400, detail="Этот скин сейчас недоступен для апгрейда — выберите скин дешевле")
 
     # atomic debit: balance and skins are checked and taken in one update (no double spend)
     debit_filter: dict = {"session_id": payload.session_id, "balance": {"$gte": payload.bet_amount - 1e-9}}
@@ -1009,67 +1039,68 @@ async def upgrade(payload: UpgradeIn, request: Request):
     user_update: dict = {"$inc": {"balance": -payload.bet_amount}}
     if bet_uids:
         user_update["$pull"] = {"skins": {"uid": {"$in": bet_uids}}}
-    debit = await db.users.update_one(debit_filter, user_update)
-    if debit.matched_count == 0:
+    fresh = await db.users.find_one_and_update(debit_filter, user_update, projection={"_id": 0, "balance": 1}, return_document=ReturnDocument.AFTER)
+    if not fresh:
         raise HTTPException(status_code=400, detail="Недостаточно баланса или скин уже использован")
-    fresh = await db.users.find_one({"session_id": payload.session_id}, {"_id": 0, "balance": 1})
     new_balance = float(fresh.get("balance", 0))
 
+    # the roll itself is honest and independent of the bank; only the payout decision is serialized
+    roll = random.random()
+    win = abs(roll * 360 - 180) < chance * 180
+    forced_loss = False
+    forced_reason = None
+    protection: dict = {"rtp": rtp}
+    target = None
     upgrade_id = str(uuid.uuid4())
-    async with bank_lock() as lock:
-        roll = random.random()
-        win = abs(roll * 360 - 180) < chance * 180
-        forced_loss = False
-        forced_reason = None
-        protection: dict = {"rtp": rtp, **solvency}
-        if win:
-            # race guard only: another payout in the same instant could have used the headroom
+    if win:
+        async with bank_lock() as lock:
+            # solvency: the bank must cover every player liability plus this prize — otherwise the spin is a loss
             headroom, solvency = await solvency_headroom()
-            if not lock.leased or headroom + 1e-9 < target_price:
+            bank_can_pay = headroom + 1e-9 >= target_price
+            protection.update({**solvency, "bank_can_pay": bank_can_pay})
+            if not lock.leased or not bank_can_pay:
                 win, forced_loss, forced_reason = False, True, ("lock" if not lock.leased else "bank")
-                protection.update(solvency)
                 roll = losing_roll(chance)
-        angle = roll * 360 - 180
+            else:
+                target = {**shop_item, "uid": str(uuid.uuid4())}
+                await db.users.update_one({"session_id": payload.session_id}, {"$push": {"skins": target}})
+    angle = landing_angle(roll, chance, win)
 
-        await db.upgrades.insert_one({
-            "id": upgrade_id,
-            "session_id": payload.session_id,
-            "bet_amount": payload.bet_amount,
-            "bet_items": bet_skins,
-            "items_total": items_total,
-            "target_item": shop_item,
-            "chance": chance,
-            "roll": roll,
-            "win": win,
-            "forced_loss": forced_loss,
-            "forced_reason": forced_reason if forced_loss else None,
-            "protection": protection,
-            "created_at": now_utc(),
-        })
-
-        if win:
-            target = {**shop_item, "uid": str(uuid.uuid4())}
-            drop = Drop(
-                session_id=payload.session_id,
-                nickname=user.get("nickname", "Player"),
-                item_name=str(target.get("name", "Item")),
-                item_type=str(target.get("type", "")),
-                item_price=float(target.get("price", 0)),
-                item_image=target.get("image"),
-                item_rarity=target.get("rarity"),
-                chance=chance,
-                avatar=user.get("avatar"),
-                discord_id=user.get("discord_id"),
-                gold_nick=bool(user.get("gold_nick")),
-            )
-            await db.drops.insert_one(drop.model_dump())
-            await db.users.update_one(
-                {"session_id": payload.session_id},
-                {"$push": {"skins": target}},
-            )
-            await db.item_history.insert_one(
-                {"id": str(uuid.uuid4()), "session_id": payload.session_id, "kind": "won", "item": target, "price": float(shop_item.get("price") or 0), "created_at": now_utc()}
-            )
+    writes = [db.upgrades.insert_one({
+        "id": upgrade_id,
+        "session_id": payload.session_id,
+        "bet_amount": payload.bet_amount,
+        "bet_items": bet_skins,
+        "items_total": items_total,
+        "target_item": shop_item,
+        "chance": chance,
+        "roll": roll,
+        "win": win,
+        "forced_loss": forced_loss,
+        "forced_reason": forced_reason if forced_loss else None,
+        "protection": protection,
+        "created_at": now_utc(),
+    })]
+    if win:
+        drop = Drop(
+            session_id=payload.session_id,
+            nickname=user.get("nickname", "Player"),
+            item_name=str(target.get("name", "Item")),
+            item_type=str(target.get("type", "")),
+            item_price=float(target.get("price", 0)),
+            item_image=target.get("image"),
+            item_rarity=target.get("rarity"),
+            chance=chance,
+            avatar=user.get("avatar"),
+            discord_id=user.get("discord_id"),
+            gold_nick=bool(user.get("gold_nick")),
+        )
+        writes.append(db.drops.insert_one(drop.model_dump()))
+        writes.append(db.item_history.insert_one(
+            {"id": str(uuid.uuid4()), "session_id": payload.session_id, "kind": "won", "item": target, "price": float(shop_item.get("price") or 0), "created_at": now_utc()}
+        ))
+    await asyncio.gather(*writes)
+    upgrades_total = await count_upgrades()
 
     return UpgradeOut(
         id=upgrade_id,
@@ -1078,7 +1109,7 @@ async def upgrade(payload: UpgradeIn, request: Request):
         chance=chance,
         angle=angle,
         balance=new_balance,
-        upgrades_total=await count_upgrades(),
+        upgrades_total=upgrades_total,
     )
 
 
@@ -1110,6 +1141,12 @@ async def ensure_indexes():
     await db.withdrawals.create_index([("status", 1), ("created_at", 1)])
     await db.bank_ledger.create_index("created_at")
     await db.upgrades.create_index([("win", 1), ("forced_loss", 1)])
+    await db.upgrades.create_index([("session_id", 1), ("created_at", -1)])
+    await db.drops.create_index([("session_id", 1), ("created_at", -1)])
+    await db.drops.create_index([("session_id", 1), ("item_price", -1)])
+    await db.users.create_index("discord_id")
+    await db.withdrawals.create_index([("session_id", 1), ("status", 1)])
+    await db.shop_items.create_index("id")
     await db.oauth_states.create_index("created_at", expireAfterSeconds=600)
     await db.admin_sessions.create_index("jti", unique=True)
     await db.admin_sessions.create_index("expires_at", expireAfterSeconds=0)
